@@ -9,65 +9,66 @@ jobs:
     runs-on: self-hosted
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Generate Semantic Version
-      id: version
-      uses: paulhatch/semantic-version@v5.4.0
-      with:
-        tag_prefix: "v"
-        format: "${major}.${minor}.${patch}"
-        major_pattern: "BREAKING CHANGE"
-        minor_pattern: "feat"
+      - name: Generate Semantic Version
+        id: version
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: "v"
+          format: "${major}.${minor}.${patch}"
+          major_pattern: "BREAKING CHANGE"
+          minor_pattern: "feat"
 
-    - name: Print version
-      run: echo "VERSION=${{ steps.version.outputs.version }}"
+      - name: Print version
+        run: echo "VERSION=${{ steps.version.outputs.version }}"
 
-    - name: Build Docker Image
-      run: |
-        VERSION=${{ steps.version.outputs.version }}
-        # CORRECTED: using 'fubuki-o9' (letter o)
-        docker build --no-cache \
-          -t ghcr.io/fubuki-o9/devsecops-app:$VERSION \
-          -t ghcr.io/fubuki-o9/devsecops-app:latest \
-          -f app/Dockerfile app/
+      - name: Build Docker Image
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          docker build --no-cache \
+            -t ghcr.io/fubuki-o9/devsecops-app:$VERSION \
+            -t ghcr.io/fubuki-o9/devsecops-app:latest \
+            -f app/Dockerfile app/
 
-    - name: Scan Image with Trivy
-      uses: aquasecurity/trivy-action@0.20.0
-      with:
-        # CORRECTED: using 'fubuki-o9' (letter o)
-        image-ref: ghcr.io/fubuki-o9/devsecops-app:latest
-        severity: CRITICAL,HIGH
-        ignore-unfixed: true
-        exit-code: "0"
+      # --- SECURITY GATE ---
+      # Fail the build on CRITICAL/HIGH vulnerabilities that have a fix
+      # available. This is the "Sec" in DevSecOps: a vulnerable image never
+      # gets pushed or deployed. (Set exit-code back to "0" only if you want
+      # the scan to be advisory rather than blocking.)
+      - name: Scan Image with Trivy
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: ghcr.io/fubuki-o9/devsecops-app:latest
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
 
-    - name: Login to GHCR
-      run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Login to GHCR
+        run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-    - name: Push Images
-      run: |
-        VERSION=${{ steps.version.outputs.version }}
-        # CORRECTED: using 'fubuki-o9' (letter o)
-        docker push ghcr.io/fubuki-o9/devsecops-app:$VERSION
-        docker push ghcr.io/fubuki-o9/devsecops-app:latest
+      - name: Push Images
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          docker push ghcr.io/fubuki-o9/devsecops-app:$VERSION
+          docker push ghcr.io/fubuki-o9/devsecops-app:latest
 
-    - name: Create GHCR Secret
-      run: |
-        kubectl delete secret ghcr-secret --ignore-not-found=true
-        kubectl create secret docker-registry ghcr-secret \
-          --docker-server=ghcr.io \
-          --docker-username=${{ github.actor }} \
-          --docker-password=${{ secrets.GHCR_PAT }} \
-          --docker-email=dummy@example.com
+      - name: Create GHCR Pull Secret
+        run: |
+          kubectl delete secret ghcr-secret --ignore-not-found=true
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=ghcr.io \
+            --docker-username=${{ github.actor }} \
+            --docker-password=${{ secrets.GHCR_PAT }} \
+            --docker-email=dummy@example.com
 
-    - name: Apply Manifests
-      run: kubectl apply -f k8s/
+      - name: Apply Manifests
+        run: kubectl apply -f k8s/
 
-    - name: Patch Deployment With Version
-      run: |
-        VERSION=${{ steps.version.outputs.version }}
-        # CORRECTED: using 'fubuki-o9' (letter o)
-        kubectl set image deployment/devsecops-app web=ghcr.io/fubuki-o9/devsecops-app:$VERSION
+      - name: Patch Deployment With Version
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          kubectl set image deployment/devsecops-app web=ghcr.io/fubuki-o9/devsecops-app:$VERSION
 
-    - name: Wait for Rollout
-      run: kubectl rollout status deployment/devsecops-app
+      - name: Wait for Rollout
+        run: kubectl rollout status deployment/devsecops-app --timeout=120s
